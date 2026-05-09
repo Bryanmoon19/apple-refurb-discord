@@ -1,0 +1,37 @@
+name: Apple Refurb Monitor
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 min
+  workflow_dispatch:
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore seen cache
+        uses: actions/cache@v4
+        with:
+          path: seen.json
+          key: seen-cache-${{ github.run_id }}
+          restore-keys: seen-cache-
+
+      - name: Run monitor
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          PRICE_CAP: ${{ vars.PRICE_CAP || '600' }}
+          APPLE_URL: ${{ vars.APPLE_URL || 'https://www.apple.com/shop/refurbished/mac/mac-mini' }}
+        run: python monitor.py
+
+      - name: Save seen cache
+        uses: actions/cache@v4
+        with:
+          path: seen.json
+          key: seen-cache-${{ github.run_id }}
