@@ -18,15 +18,68 @@ DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
 STATE_FILE = os.getenv("STATE_FILE", "seen.json")
 
 
-def _parse_ram_config(raw: str) -> list[str]:
-    """Accept '24gb' or '16gb,24gb' → list of normalized strings."""
+# ── RAM parsing ─────────────────────────────────────────────────────
+def _ram_to_gb(raw: str) -> int | None:
+    """Convert '24gb' or '16 GB' → integer GB."""
+    m = re.search(r"(\d+)", raw.lower().replace(" ", ""))
+    return int(m.group(1)) if m else None
+
+
+def _parse_ram_config(raw: str) -> dict:
+    """
+    Parse RAM filter expression.
+    Returns dict with keys:
+        mode: 'exact' | 'min' | 'max' | 'range'
+        values: list[str]          (for exact mode)
+        min_gb: int | None         (for min / range)
+        max_gb: int | None         (for max / range)
+    Syntax:
+        '24gb'          → exact 24gb
+        '16gb,24gb'     → exact 16gb OR 24gb
+        '>24gb'         → more than 24gb
+        '>=24gb'        → 24gb or more
+        '<32gb'         → less than 32gb
+        '16gb-32gb'     → between 16 and 32gb (inclusive)
+    """
+    result = {"mode": "exact", "values": [], "min_gb": None, "max_gb": None}
     if not raw:
-        return []
-    return [x.strip().lower() for x in raw.split(",") if x.strip()]
+        return result
+
+    raw = raw.strip().lower().replace(" ", "")
+
+    # Range syntax: 16gb-32gb
+    range_match = re.match(r"^(\d+)gb?\s*-\s*(\d+)gb?", raw)
+    if range_match:
+        result["mode"] = "range"
+        result["min_gb"] = int(range_match.group(1))
+        result["max_gb"] = int(range_match.group(2))
+        return result
+
+    # Comparison syntax: >24gb, >=24gb, <32gb, <=32gb
+    comp_match = re.match(r"^(>=?|<=?)(\d+)gb?", raw)
+    if comp_match:
+        op, val = comp_match.group(1), int(comp_match.group(2))
+        if op == ">":
+            result["mode"] = "min"
+            result["min_gb"] = val + 1  # strictly greater
+        elif op == ">=":
+            result["mode"] = "min"
+            result["min_gb"] = val
+        elif op == "<":
+            result["mode"] = "max"
+            result["max_gb"] = val - 1  # strictly less
+        elif op == "<=":
+            result["mode"] = "max"
+            result["max_gb"] = val
+        return result
+
+    # Exact match syntax: 24gb or 16gb,24gb
+    result["mode"] = "exact"
+    result["values"] = [x.strip() for x in raw.split(",") if x.strip()]
+    return result
 
 
-# Pre-compute valid RAM targets
-RAM_TARGETS = _parse_ram_config(RAM_SIZE)
+RAM_CONFIG = _parse_ram_config(RAM_SIZE)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -181,10 +234,24 @@ def _tile_to_listing(tile: dict) -> dict | None:
 def matches_criteria(item: dict) -> bool:
     """Check if item passes both RAM and price filters (if set)."""
     # RAM filter
-    if RAM_TARGETS:
+    if RAM_CONFIG.get("mode") != "exact" or RAM_CONFIG.get("values"):
         item_ram = item.get("ram", "").strip().lower()
-        if item_ram not in RAM_TARGETS:
-            return False
+        item_ram_gb = _ram_to_gb(item_ram)
+
+        if RAM_CONFIG["mode"] == "exact":
+            if item_ram not in [v.lower() for v in RAM_CONFIG["values"]]:
+                return False
+        elif RAM_CONFIG["mode"] == "min":
+            if item_ram_gb is None or item_ram_gb < RAM_CONFIG["min_gb"]:
+                return False
+        elif RAM_CONFIG["mode"] == "max":
+            if item_ram_gb is None or item_ram_gb > RAM_CONFIG["max_gb"]:
+                return False
+        elif RAM_CONFIG["mode"] == "range":
+            if item_ram_gb is None:
+                return False
+            if item_ram_gb < RAM_CONFIG["min_gb"] or item_ram_gb > RAM_CONFIG["max_gb"]:
+                return False
 
     # Price filter
     if PRICE_CAP:
@@ -196,6 +263,19 @@ def matches_criteria(item: dict) -> bool:
             pass
 
     return True
+
+
+def _ram_filter_label() -> str:
+    """Human-readable RAM filter for Discord embeds."""
+    if RAM_CONFIG["mode"] == "exact" and RAM_CONFIG["values"]:
+        return ", ".join(RAM_CONFIG["values"]).upper()
+    elif RAM_CONFIG["mode"] == "min":
+        return f"≥ {RAM_CONFIG['min_gb']}GB"
+    elif RAM_CONFIG["mode"] == "max":
+        return f"≤ {RAM_CONFIG['max_gb']}GB"
+    elif RAM_CONFIG["mode"] == "range":
+        return f"{RAM_CONFIG['min_gb']}-{RAM_CONFIG['max_gb']}GB"
+    return "Any"
 
 
 # ── Discord ─────────────────────────────────────────────────────────
@@ -215,8 +295,8 @@ def send_discord(items: list[dict], url: str) -> None:
 
         # Show active filters
         filter_notes = []
-        if RAM_TARGETS:
-            filter_notes.append(f"RAM: {', '.join(RAM_TARGETS).upper()}")
+        if RAM_CONFIG.get("values") or RAM_CONFIG["mode"] != "exact":
+            filter_notes.append(f"RAM: {_ram_filter_label()}")
         if PRICE_CAP:
             filter_notes.append(f"Max price: ${float(PRICE_CAP):.0f}")
         if filter_notes:
@@ -286,8 +366,8 @@ def main():
     # Apply RAM/price filters
     deals = [it for it in filtered if matches_criteria(it)]
     filter_desc = []
-    if RAM_TARGETS:
-        filter_desc.append(f"RAM in {RAM_TARGETS}")
+    if RAM_CONFIG["mode"] != "exact" or RAM_CONFIG["values"]:
+        filter_desc.append(f"RAM: {_ram_filter_label()}")
     if PRICE_CAP:
         filter_desc.append(f"price ≤ ${PRICE_CAP}")
     print(f"{len(deals)} items match ({', '.join(filter_desc) if filter_desc else 'no filters'})")
