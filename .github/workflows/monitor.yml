@@ -26,7 +26,8 @@ jobs:
       - name: Run monitor
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          PRICE_CAP: ${{ vars.PRICE_CAP || '600' }}
+          PRICE_CAP: ${{ vars.PRICE_CAP || '' }}
+          RAM_SIZE: ${{ vars.RAM_SIZE || '' }}
           APPLE_URL: ${{ vars.APPLE_URL || 'https://www.apple.com/shop/refurbished/mac/mac-mini' }}
         run: python monitor.py
 
