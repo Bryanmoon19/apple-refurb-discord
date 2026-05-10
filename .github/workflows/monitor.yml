@@ -26,9 +26,11 @@ jobs:
       - name: Run monitor
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          DISCORD_WEBHOOK_HOT: ${{ secrets.DISCORD_WEBHOOK_HOT || '' }}
           PRICE_CAP: ${{ vars.PRICE_CAP || '' }}
           RAM_SIZE: ${{ vars.RAM_SIZE || '' }}
           APPLE_URL: ${{ vars.APPLE_URL || 'https://www.apple.com/shop/refurbished/mac/mac-mini' }}
+          RETAIL_PRICES: ${{ vars.RETAIL_PRICES || '' }}
         run: python monitor.py
 
       - name: Save seen cache
